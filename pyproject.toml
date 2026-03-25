@@ -1,0 +1,24 @@
+[project]
+name = "k-pilot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Undead34", email = "maizogabriel@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.12.5",
+    "pydantic-ai>=1.71.0",
+    "pydbus>=0.6.0",
+    "pygobject>=3.56.2",
+    "python-dotenv>=1.2.2",
+    "structlog>=25.5.0",
+]
+
+[project.scripts]
+k-pilot = "k_pilot:main"
+
+[build-system]
+requires = ["uv_build>=0.10.11,<0.11.0"]
+build-backend = "uv_build"
