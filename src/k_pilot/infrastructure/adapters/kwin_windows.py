@@ -3,16 +3,12 @@
 import asyncio
 import shutil
 import subprocess
-from typing import Optional
-
-import structlog
 
 from k_pilot.domain.models import Result, WindowInfo
 from k_pilot.domain.ports import WindowManagerPort
+from k_pilot.infrastructure.logging import get_logger
 
-logger = structlog.get_logger()
-
-"""Adapter para KWin usando kdotool v0.2.2 (KDE Plasma 6 Wayland)."""
+logger = get_logger(layer="infrastructure", component="kwin_adapter")
 
 
 class KWinWindowAdapter(WindowManagerPort):
@@ -24,22 +20,19 @@ class KWinWindowAdapter(WindowManagerPort):
     def __init__(self, bus=None):
         self._kdotool = shutil.which("kdotool")
         self._available = self._kdotool is not None
-        # Limitar concurrencia a 3 llamadas simultáneas para no saturar KWin
         self._semaphore = asyncio.Semaphore(3)
 
         if self._available:
-            logger.info("kwin_adapter.initialized", version="0.2.2")
+            logger.info("kwin_adapter.initialized", version="0.2.2", backend="kdotool")
         else:
-            logger.error("kwin_adapter.not_found")
+            logger.error("kwin_adapter.not_found", executable="kdotool")
 
     def is_available(self) -> bool:
         return self._available
 
-    def _run(
-        self, *args, timeout: int = 5, check_output: bool = True
-    ) -> tuple[bool, str]:
+    def _run(self, *args, timeout: int = 5) -> tuple[bool, str]:
         """Ejecuta kdotool y retorna (éxito, stdout/stderr)."""
-        if not self._available:
+        if not self._available or not self._kdotool:
             return False, "kdotool no instalado"
 
         cmd = [self._kdotool, *args]
@@ -47,20 +40,24 @@ class KWinWindowAdapter(WindowManagerPort):
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
 
             if result.returncode != 0:
+                stderr = result.stderr.strip()
                 logger.warning(
                     "kdotool.error",
                     args=args,
-                    stderr=result.stderr.strip(),
+                    stderr=stderr,
                     code=result.returncode,
                 )
-                return False, result.stderr.strip()
+                return False, stderr
 
             output = result.stdout.strip()
-            logger.debug("kdotool.success", args=args, output=output[:50])
+            logger.debug("kdotool.success", args=args, output=output[:80])
             return True, output
 
         except subprocess.TimeoutExpired:
@@ -70,62 +67,75 @@ class KWinWindowAdapter(WindowManagerPort):
             logger.error("kdotool.exception", error=str(e))
             return False, str(e)
 
+    async def _run_async(self, *args, timeout: int = 5) -> tuple[bool, str]:
+        """Wrapper async para subprocess.run."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: self._run(*args, timeout=timeout)
+        )
+
     async def _run_with_retry(self, *args, retries: int = 1) -> tuple[bool, str]:
-        """Ejecuta con reintentos para errores de Scripting."""
-        async with self._semaphore:  # Limitar concurrencia
+        """Ejecuta con reintentos para errores transitorios de scripting/DBus."""
+        success, output = False, ""
+
+        async with self._semaphore:
             for attempt in range(retries + 1):
                 success, output = await self._run_async(*args)
                 if success or "No such object path" not in output:
                     return success, output
+
                 if attempt < retries:
                     logger.warning("kdotool.retry", args=args, attempt=attempt + 1)
-                    await asyncio.sleep(0.1)  # Pequeña pausa antes de reintentar
-            return success, output
+                    await asyncio.sleep(0.1)
 
-    def _run_async(self, *args, timeout: int = 5):
-        """Wrapper async para subprocess."""
-        loop = asyncio.get_event_loop()
-        return loop.run_in_executor(None, lambda: self._run(*args, timeout=timeout))
+        return success, output
 
     async def list_windows(self) -> list[WindowInfo]:
-        """Versión async con concurrencia controlada."""
-        if not self._kdotool:
+        """Lista ventanas visibles/gestionadas por KWin."""
+        if not self._available:
+            logger.warning("window_port.unavailable")
             return []
 
-        # 1. Obtener lista de IDs
+        logger.info("window_port.list.started")
+
         success, stdout = await self._run_with_retry(
             "search", "--class", ".", "--limit", "50"
         )
         if not success or not stdout:
+            logger.warning("window_port.list.empty_source", success=success)
             return []
 
-        uuids = [
+        window_ids = [
             line.strip()
-            for line in stdout.split("\n")
+            for line in stdout.splitlines()
             if line.strip() and line.strip().startswith("{")
         ]
 
-        # 2. Obtener active window UNA SOLA VEZ
         _, active_id = await self._run_with_retry("getactivewindow")
 
-        # 3. Procesar en paralelo pero controlado (max 3 a la vez)
-        tasks = [self._get_window_info_safe(wid, active_id) for wid in uuids]
+        tasks = [self._get_window_info_safe(wid, active_id) for wid in window_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        windows = []
-        for r in results:
-            if isinstance(r, WindowInfo):
-                windows.append(r)
-            elif isinstance(r, Exception):
-                logger.error("window.info_failed", error=str(r))
+        windows: list[WindowInfo] = []
+        for result in results:
+            if isinstance(result, WindowInfo):
+                windows.append(result)
+            elif isinstance(result, Exception):
+                logger.error("window.info_failed", error=str(result))
 
-        windows.sort(key=lambda w: (0 if w.is_active else 1, w.desktop))
+        windows.sort(
+            key=lambda w: (
+                0 if w.is_active else 1,
+                w.desktop if w.desktop is not None else 9999,
+                w.title,
+            )
+        )
+        logger.info("window_port.list.completed", count=len(windows))
         return windows
 
     async def _get_window_info_safe(self, wid: str, active_id: str) -> WindowInfo:
-        """Obtiene info de ventana con manejo de errores."""
+        """Obtiene la información de una ventana sin romper el listado si falla."""
         try:
-            # Usar gather pero con el semáforo interno ya limitado
             name_task = self._run_with_retry("getwindowname", wid)
             class_task = self._run_with_retry("getwindowclassname", wid)
             desk_task = self._run_with_retry("get_desktop_for_window", wid)
@@ -136,96 +146,159 @@ class KWinWindowAdapter(WindowManagerPort):
                 (ok_desk, desk_str),
             ) = await asyncio.gather(name_task, class_task, desk_task)
 
-            title = title if ok_name else "Desconocido"
-            app_name = app_name if ok_class else "desconocido"
+            title = title if ok_name and title else "Desconocido"
+            app_name = app_name if ok_class and app_name else "desconocido"
 
-            try:
-                desktop = int(desk_str) if ok_desk and desk_str != "null" else -1
-            except ValueError:
-                desktop = -1
+            desktop: int | None = None
+            if ok_desk and desk_str and desk_str != "null":
+                try:
+                    desktop = int(desk_str)
+                except ValueError:
+                    desktop = None
 
             return WindowInfo(
                 id=wid,
                 title=title,
                 app_name=app_name,
-                is_active=wid == active_id,
+                is_active=(wid == active_id),
                 is_minimized=False,
                 desktop=desktop,
             )
+
         except Exception as e:
             logger.error("window.info_exception", id=wid, error=str(e))
-            # Retornar ventana vacía en caso de error para no romper el listado
             return WindowInfo(
                 id=wid,
                 title="Error al obtener",
                 app_name="desconocido",
                 is_active=False,
                 is_minimized=False,
-                desktop=-1,
+                desktop=None,
             )
 
-    def focus_window(self, window_id: str) -> Result:
-        """Activa la ventana."""
-        success, msg = self._run("windowactivate", window_id)
-        if success:
-            return Result(True, "Ventana activada")
-        return Result(False, f"No se pudo activar: {msg}")
-
-    def minimize_window(self, window_id: str) -> Result:
-        """Minimiza la ventana."""
-        success, msg = self._run("windowminimize", window_id)
-        if success:
-            return Result(True, "Ventana minimizada")
-        return Result(False, msg)
-
-    def maximize_window(self, window_id: str) -> Result:
-        """Maximiza ventana."""
-        success, msg = self._run("windowstate", "--add", "FULLSCREEN", window_id)
-        if success:
-            return Result(True, "Ventana maximizada (fullscreen)")
-        return Result(False, f"No se pudo maximizar: {msg}")
-
-    def close_window(self, window_id: str) -> Result:
-        """Cierra la ventana."""
-        success, msg = self._run("windowclose", window_id)
-        if success:
-            return Result(True, "Ventana cerrada")
-        return Result(False, msg)
-
-    def get_active_window(self) -> Optional[WindowInfo]:
-        """Obtiene la ventana actualmente enfocada."""
-        success, wid = self._run("getactivewindow", timeout=2)
+    async def get_active_window(self) -> WindowInfo | None:
+        """Obtiene la ventana actualmente activa."""
+        logger.debug("window_port.get_active.started")
+        success, wid = await self._run_with_retry("getactivewindow", retries=0)
         if not success or not wid:
+            logger.warning("window_port.get_active.failed")
             return None
 
-        success_name, title = self._run("getwindowname", wid, timeout=2)
-        title = title if success_name else "Desconocido"
-
-        success_class, app_name = self._run("getwindowclassname", wid, timeout=2)
-        app_name = app_name if success_class else "desconocido"
-
-        return WindowInfo(
-            id=wid,
-            title=title,
-            app_name=app_name,
-            is_active=True,
-            is_minimized=False,
-            desktop=-1,
+        success_name, title = await self._run_with_retry(
+            "getwindowname", wid, retries=0
+        )
+        success_class, app_name = await self._run_with_retry(
+            "getwindowclassname", wid, retries=0
+        )
+        success_desk, desk_str = await self._run_with_retry(
+            "get_desktop_for_window", wid, retries=0
         )
 
-    def set_window_desktop(self, window_id: str, desktop: int | str) -> Result:
-        """Mueve ventana a otro escritorio."""
-        desktop_str = str(desktop) if isinstance(desktop, int) else desktop
-        success, msg = self._run("set_desktop_for_window", window_id, desktop_str)
+        desktop: int | None = None
+        if success_desk and desk_str and desk_str != "null":
+            try:
+                desktop = int(desk_str)
+            except ValueError:
+                desktop = None
+
+        window = WindowInfo(
+            id=wid,
+            title=title if success_name and title else "Desconocido",
+            app_name=app_name if success_class and app_name else "desconocido",
+            is_active=True,
+            is_minimized=False,
+            desktop=desktop,
+        )
+        logger.info("window_port.get_active.completed", window_id=wid)
+        return window
+
+    async def focus_window(self, window_id: str) -> Result:
+        """Activa la ventana."""
+        logger.info("window_port.focus.started", window_id=window_id)
+        success, msg = await self._run_with_retry("windowactivate", window_id)
         if success:
-            return Result(True, f"Ventana movida al escritorio {desktop_str}")
+            logger.info(
+                "window_port.focus.completed", window_id=window_id, success=True
+            )
+            return Result(True, "Ventana activada", {"window_id": window_id})
+        logger.warning(
+            "window_port.focus.completed", window_id=window_id, success=False
+        )
+        return Result(False, f"No se pudo activar: {msg}")
+
+    async def minimize_window(self, window_id: str) -> Result:
+        """Minimiza la ventana."""
+        logger.info("window_port.minimize.started", window_id=window_id)
+        success, msg = await self._run_with_retry("windowminimize", window_id)
+        if success:
+            logger.info(
+                "window_port.minimize.completed", window_id=window_id, success=True
+            )
+            return Result(True, "Ventana minimizada", {"window_id": window_id})
+        logger.warning(
+            "window_port.minimize.completed", window_id=window_id, success=False
+        )
         return Result(False, msg)
 
-    def set_always_on_top(self, window_id: str, enabled: bool = True) -> Result:
-        """Marca ventana como 'siempre encima'."""
+    async def maximize_window(self, window_id: str) -> Result:
+        """Maximiza la ventana."""
+        logger.info("window_port.maximize.started", window_id=window_id)
+        success, msg = await self._run_with_retry(
+            "windowstate", "--add", "FULLSCREEN", window_id
+        )
+        if success:
+            logger.info(
+                "window_port.maximize.completed", window_id=window_id, success=True
+            )
+            return Result(
+                True,
+                "Ventana maximizada (fullscreen)",
+                {"window_id": window_id, "state": "fullscreen"},
+            )
+        logger.warning(
+            "window_port.maximize.completed", window_id=window_id, success=False
+        )
+        return Result(False, f"No se pudo maximizar: {msg}")
+
+    async def close_window(self, window_id: str) -> Result:
+        """Cierra la ventana."""
+        logger.info("window_port.close.started", window_id=window_id)
+        success, msg = await self._run_with_retry("windowclose", window_id)
+        if success:
+            logger.info(
+                "window_port.close.completed", window_id=window_id, success=True
+            )
+            return Result(True, "Ventana cerrada", {"window_id": window_id})
+        logger.warning(
+            "window_port.close.completed", window_id=window_id, success=False
+        )
+        return Result(False, msg)
+
+    async def set_window_desktop(self, window_id: str, desktop: int | str) -> Result:
+        """Mueve una ventana a otro escritorio."""
+        desktop_str = str(desktop)
+        success, msg = await self._run_with_retry(
+            "set_desktop_for_window", window_id, desktop_str
+        )
+        if success:
+            return Result(
+                True,
+                f"Ventana movida al escritorio {desktop_str}",
+                {"window_id": window_id, "desktop": desktop_str},
+            )
+        return Result(False, msg)
+
+    async def set_always_on_top(self, window_id: str, enabled: bool = True) -> Result:
+        """Activa o desactiva el modo 'siempre encima'."""
         action = "--add" if enabled else "--remove"
-        success, msg = self._run("windowstate", action, "ABOVE", window_id)
+        success, msg = await self._run_with_retry(
+            "windowstate", action, "ABOVE", window_id
+        )
         if success:
             state = "activado" if enabled else "desactivado"
-            return Result(True, f"Siempre encima {state}")
+            return Result(
+                True,
+                f"Siempre encima {state}",
+                {"window_id": window_id, "always_on_top": enabled},
+            )
         return Result(False, msg)

@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 
-from k_pilot.domain.ports import MediaControlPort, NotificationPort, WindowManagerPort
+from k_pilot.domain.ports import (
+    MediaControlPort,
+    NotificationPort,
+    WindowManagerPort,
+)
 
 
 @dataclass(frozen=True)
@@ -9,4 +13,4 @@ class AppDeps:
 
     notification_port: NotificationPort
     window_port: WindowManagerPort
-    media_port: MediaControlPort  # <-- Agregar
+    media_port: MediaControlPort

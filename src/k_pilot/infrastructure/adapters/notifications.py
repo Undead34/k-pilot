@@ -1,43 +1,48 @@
-"""Adapter para notificaciones Freedesktop (funciona en KDE)."""
+"""Adapter para notificaciones Freedesktop unificado con dasbus."""
 
-import structlog
-from gi.repository import GLib  # Asegúrate de importar GLib aquí
-from pydbus import SessionBus
+from typing import Any
+
+from dasbus.connection import SessionMessageBus
+from gi.repository import GLib  # type: ignore
 
 from k_pilot.domain.models import Notification, Priority, Result
 from k_pilot.domain.ports import NotificationPort
+from k_pilot.infrastructure.logging import get_logger
 
-logger = structlog.get_logger()
+logger = get_logger(layer="infrastructure", component="notification_adapter")
 
 
 class FreedesktopNotificationAdapter(NotificationPort):
-    """Implementación via org.freedesktop.Notifications."""
+    """Implementación via org.freedesktop.Notifications usando dasbus."""
 
-    INTERFACE = "org.freedesktop.Notifications"
-    PATH = "/org/freedesktop/Notifications"
+    SERVICE_NAME = "org.freedesktop.Notifications"
+    OBJECT_PATH = "/org/freedesktop/Notifications"
 
-    def __init__(self, bus: SessionBus):
-        self._bus = bus
+    def __init__(self, bus: SessionMessageBus | None = None):
+        self._bus = bus or SessionMessageBus()
         self._proxy = None
         self._connect()
 
     def _connect(self):
         try:
-            self._proxy = self._bus.get(self.INTERFACE, self.PATH)
-            logger.info("notification_adapter.connected")
+            self._proxy = self._bus.get_proxy(
+                service_name=self.SERVICE_NAME,
+                object_path=self.OBJECT_PATH,
+            )
+            logger.info("notification_adapter.connected", backend="dasbus")
         except Exception as e:
-            logger.error("notification_adapter.connect_failed", error=str(e))
-            self._proxy = None
+            logger.exception("notification_adapter.connect_failed", error=str(e))
+            self._proxy: Any = None
 
     def is_available(self) -> bool:
         return self._proxy is not None
 
     def send(self, notification: Notification) -> Result:
         if not self.is_available():
+            logger.warning("notification_adapter.unavailable")
             return Result(False, "Servicio de notificaciones no disponible")
 
         try:
-            # Mapear Priority a urgencia Freedesktop (0=low, 1=normal, 2=critical)
             urgency_map = {
                 Priority.LOW: 0,
                 Priority.NORMAL: 1,
@@ -45,28 +50,26 @@ class FreedesktopNotificationAdapter(NotificationPort):
                 Priority.CRITICAL: 2,
             }
 
-            # IMPORTANTE: Los hints deben ser GLib.Variant, no tipos Python crudos
             urgency_value = urgency_map.get(notification.priority, 1)
 
             hints = {
-                "urgency": GLib.Variant("y", urgency_value),  # 'y' = byte/uint8
-                "desktop-entry": GLib.Variant("s", "k-pilot"),  # 's' = string
+                "urgency": GLib.Variant("y", urgency_value),
+                "desktop-entry": GLib.Variant("s", "k-pilot"),
             }
 
-            # Si es crítico, añadir hint específico de KDE para persistencia
             if notification.priority == Priority.CRITICAL:
-                hints["resident"] = GLib.Variant("b", True)  # 'b' = boolean
+                hints["resident"] = GLib.Variant("b", True)
 
-            # Llamada D-Bus con tipos correctos
+            # Llamada D-Bus nativa con dasbus
             nid = self._proxy.Notify(
-                "K-Pilot",  # app_name (string)
-                0,  # replaces_id (uint32)
-                notification.icon,  # app_icon (string)
-                notification.title,  # summary (string)
-                notification.body,  # body (string)
-                [],  # actions (array de strings)
-                hints,  # hints (dict string->variant)
-                notification.timeout_ms,  # expire_timeout (int32)
+                "K-Pilot",  # app_name
+                0,  # replaces_id
+                notification.icon,  # app_icon
+                notification.title,  # summary
+                notification.body,  # body
+                [],  # actions
+                hints,  # hints
+                notification.timeout_ms,  # expire_timeout
             )
 
             logger.info(
@@ -74,17 +77,15 @@ class FreedesktopNotificationAdapter(NotificationPort):
                 title=notification.title,
                 priority=notification.priority.name,
                 id=nid,
+                has_icon=bool(notification.icon),
             )
 
             return Result(
-                success=True,
-                message=f"Notificación enviada (ID: {nid})",
+                True,
+                f"Notificación enviada (ID: {nid})",
                 data={"notification_id": nid},
             )
 
-        except GLib.Error as e:
-            logger.error("notification.dbus_error", error=e.message)
-            return Result(False, f"Error D-Bus: {e.message}")
         except Exception as e:
-            logger.error("notification.unexpected_error", error=str(e))
+            logger.exception("notification.unexpected_error", error=str(e))
             return Result(False, f"Error: {str(e)}")

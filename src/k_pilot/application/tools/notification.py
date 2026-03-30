@@ -4,6 +4,9 @@ from pydantic_ai import RunContext
 
 from k_pilot.application.deps import AppDeps
 from k_pilot.domain.models import Notification, Priority
+from k_pilot.infrastructure.logging import get_logger
+
+logger = get_logger(layer="application", component="notification_tools")
 
 
 async def notify_user(
@@ -11,22 +14,28 @@ async def notify_user(
     summary: str,
     body: str,
     priority: Literal["low", "normal", "high", "critical"] = "normal",
-    icon: str = "dialog-information",
+    icon: str = "",
 ) -> str:
     """
     Envía una notificación nativa al escritorio KDE.
 
-    Usa esto para:
-    - Confirmar que una operación larga terminó
-    - Alertar errores importantes
-    - Informar estado del sistema
+    REGLA VISUAL ESTRICTA (Icono vs Emoji):
+    - Si usas un icono de aplicación (ej. "spotify", "firefox"), está PROHIBIDO usar emojis en el título o cuerpo.
+    - Si el icono está vacío (""), DEBES usar un único emoji al inicio del título para dar contexto visual.
+    - NUNCA uses icono de app y emoji al mismo tiempo.
 
     Args:
-        summary: Título breve (ej: "Descarga completada")
-        body: Mensaje detallado
-        priority: low (no interrumpe), normal, high (alerta sonora), critical (persistente)
-        icon: Nombre de icono KDE (ej: "dialog-ok", "dialog-error", "download")
+        summary: Título breve en una sola línea. Sin saltos de línea.
+        body: Mensaje detallado. Soporta saltos de línea (\n) y HTML básico (<b>, <i>).
+        priority: low (no interrumpe), normal, high (alerta sonora), critical (persistente).
+        icon: Nombre de la app objetivo (ej: "vlc") o cadena vacía (""). PROHIBIDO usar iconos genéricos (ej: "dialog-info").
     """
+    logger.info(
+        "use_case.notification.send.started",
+        priority=priority,
+        has_icon=bool(icon),
+        summary_chars=len(summary),
+    )
     priority_map = {
         "low": Priority.LOW,
         "normal": Priority.NORMAL,
@@ -40,6 +49,11 @@ async def notify_user(
 
     result = ctx.deps.notification_port.send(notif)
 
+    logger.info(
+        "use_case.notification.send.completed",
+        success=result.success,
+        priority=priority,
+    )
     if result.success:
         return f"✓ {result.message}"
     return f"✗ Error: {result.message}"

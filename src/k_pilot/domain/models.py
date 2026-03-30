@@ -2,8 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from pathlib import Path
-from typing import Literal
+from typing import Any
 
 
 class Priority(Enum):
@@ -19,7 +18,6 @@ class PlaybackStatus(Enum):
     STOPPED = "Stopped"
 
 
-# ===== NUEVOS: Modos multimedia =====
 class RepeatMode(Enum):
     NONE = "None"
     TRACK = "Track"
@@ -36,7 +34,7 @@ class Notification:
     title: str
     body: str
     priority: Priority = Priority.NORMAL
-    icon: str = "dialog-information"
+    icon: str = ""  # None
     timeout_ms: int = 5000
 
 
@@ -47,30 +45,29 @@ class WindowInfo:
     app_name: str
     is_active: bool
     is_minimized: bool
-    desktop: int
+    desktop: int | None = None
 
 
 @dataclass(frozen=True)
 class Result:
     success: bool
     message: str
-    data: dict | None = None
+    data: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class MediaInfo:
     title: str
     artist: str
-    album: str
-    player_name: str
-    status: PlaybackStatus
+    album: str | None = None
+    player_name: str = ""
+    status: PlaybackStatus = PlaybackStatus.STOPPED
     position_ms: int | None = None
     length_ms: int | None = None
     artwork_url: str | None = None
-    # Campos nuevos para API completa
     repeat_mode: RepeatMode = RepeatMode.NONE
     shuffle_mode: ShuffleMode = ShuffleMode.OFF
-    volume: float = 1.0  # 0.0 - 1.0
+    volume: float = 1.0  # 0.0 a 1.0
     can_seek: bool = False
     can_go_next: bool = True
     can_go_previous: bool = True

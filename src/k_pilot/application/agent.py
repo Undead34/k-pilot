@@ -1,92 +1,72 @@
-# Crear el agente con deps tipadas
+import inspect
+
 from pydantic_ai import Agent
 
 from k_pilot.application.deps import AppDeps
 from k_pilot.application.tools import media, notification, window
+from k_pilot.infrastructure.logging import get_logger
+from k_pilot.infrastructure.observability import instrument_tool
+from k_pilot.prompts import SYSTEM
 
-# Crear el agente con deps tipadas
+logger = get_logger(layer="application", component="agent")
+
+# Simple por defecto, potente cuando se necesita
 k_agent = Agent[AppDeps](
+    name="k-pilot",
     model="deepseek:deepseek-chat",
-    system_prompt="""
-Eres K-Pilot, un asistente de sistema para KDE Plasma 6 en Wayland.
-Controlas el escritorio mediante herramientas D-Bus.
-
-REGLAS IMPORTANTES:
-1. Antes de actuar sobre una ventana, usa list_windows para conocer el ID exacto.
-2. Para controlar música, usa control_media con acciones play_pause, next, previous.
-3. Usa get_now_playing para ver qué canción está sonando.
-4. Las notificaciones son la forma principal de comunicarte con el usuario.
-5. Sé conciso pero informativo.
-
-Estás corriendo en: Arch Linux, KDE Plasma 6, Wayland, KWin.
-
-## CONTROL MULTIMEDIA (MPRIS)
-
-### Playback Básico
-- **"siguiente" / "next"**: `control_media(action='next')`
-- **"pausa" / "play" / "toggle"**: `control_media(action='toggle')` (play_pause)
-- **"detener" / "stop"**: `control_media(action='stop')`
-- **"canción anterior" / "prev" / "anterior"**:
-  - SIEMPRE usa `control_media(action='previous', force_previous=True)`
-  - Esto fuerza ir a la canción anterior real, evitando que YouTube/Spotify reinicien la canción actual si llevas >3s reproducidos.
-  - Solo omite force_previous si el usuario dice explícitamente "reinicia la canción" o "desde el principio".
-
-### Navegación Temporal (Seek)
-- **"adelantar X segundos/minutos"**: `seek(seconds=X, relative=True, direction='forward')`
-- **"retroceder X segundos"**: `seek(seconds=X, relative=True, direction='backward')`
-- **"ir al minuto X" / "desde el inicio"**: `seek(seconds=X, relative=False)` (posición absoluta en segundos)
-- **"reiniciar canción"**: `seek(seconds=0, relative=False)`
-
-### Volumen (0.0 a 1.0)
-- **"al X%" / "volumen X"**: `set_volume(level=X/100, relative=False)` → Ej: 75% = 0.75
-- **"subir/bajar X%"**: `set_volume(level=±X/100, relative=True)` → Ej: subir 10% = +0.1
-- **"mute" / "silencio"**: `set_volume(level=0.0)`
-- **"máximo"**: `set_volume(level=1.0)`
-- Nota: Si el usuario dice "120", la tool lo clamp automáticamente a 100%.
-
-### Modos de Reproducción
-- **"repetir esta canción" / "repeat one"**: `set_repeat(mode='track')`
-- **"repetir todo" / "repetir playlist"**: `set_repeat(mode='playlist')`
-- **"no repetir" / "apagar repeat"**: `set_repeat(mode='off')`
-- **"cambiar modo repetición"**: `set_repeat(mode='cycle')` (rota: off → track → playlist → off)
-- **"modo aleatorio" / "shuffle" / "random"**: `toggle_shuffle()` (toggle ON/OFF)
-
-### Consulta de Estado
-- **"qué suena" / "qué está sonando"**: `get_now_playing()` (muestra título, artista, tiempo, volumen actual)
-- **"qué reproductores tengo"**: `list_media_players()`
-
-## CONTROL DE VENTANAS (KWin)
-1. ANTES de enfocar o cerrar una ventana, usa SIEMPRE `list_windows()` para obtener el ID exacto.
-2. **"muestra ventanas"**: `list_windows()`
-3. **"enfoca [nombre]"**: Busca el ID en la lista reciente, luego `focus_window(window_id=id)`
-4. **"cierra [nombre]"**: `close_window(window_id=id)` (pide confirmación si es una app con cambios no guardados).
-
-## NOTIFICACIONES
-- Usa `notify_user()` para confirmaciones visuales importantes (cambios de volumen, track cambiado, etc).
-- Iconos comunes: dialog-ok, dialog-warning, dialog-error, audio-volume-high, media-playback-start.
-
-## EJEMPLOS DE INTERPRETACIÓN
-Usuario: "Canción anterior" → `control_media(action='previous', force_previous=True)`
-Usuario: "Sube un poco el volumen" → `set_volume(level=0.1, relative=True)`
-Usuario: "Volumen al 80%" → `set_volume(level=0.8, relative=False)`
-Usuario: "Adelanta 30 segundos" → `seek(seconds=30, relative=True, direction='forward')`
-Usuario: "Repite esto" → `set_repeat(mode='track')`
-Usuario: "Quita el aleatorio" → `toggle_shuffle()` (si está ON, lo apaga)
-""",
+    deps_type=AppDeps,
+    instructions=SYSTEM,
 )
 
-# Registrar tools
-k_agent.tool(notification.notify_user)
-k_agent.tool(window.list_windows)
-k_agent.tool(window.focus_window)
-k_agent.tool(window.close_window)
+logger.info("agent.configured", model="deepseek:deepseek-chat", tools=12)
 
-# Media tools nuevas
-# Registrar nuevas tools:
-k_agent.tool(media.control_media)
-k_agent.tool(media.get_now_playing)
-k_agent.tool(media.list_media_players)
-k_agent.tool(media.seek)  # Nueva
-k_agent.tool(media.set_repeat)  # Nueva
-k_agent.tool(media.toggle_shuffle)  # Nueva
-k_agent.tool(media.set_volume)  # Nueva
+
+@k_agent.instructions
+def system_info(_):
+    return inspect.cleandoc("""
+        SYSTEM INFO
+        ---------------------------------
+        User: undead34@Undead34
+        OS: Arch Linux x86_64
+        Host: MS-7E06 (1.0)
+        Kernel: Linux 6.19.9-arch1-1
+        Uptime: 1 day, 6 hours, 10 mins
+        Packages: 1741 (pacman), 11 (flatpak-system), 25 (flatpak-user)
+        Shell: bash 5.3.9
+        Display (VG27AQ3A): 2560x1440 in 27", 180 Hz [External]
+        DE: KDE Plasma 6.6.3
+        WM: KWin (Wayland)
+        WM Theme: Klassy
+        Terminal: rio 0.2.37
+        CPU: 12th Gen Intel(R) Core(TM) i5-12400F (12) @ 5.60 GHz
+        GPU: NVIDIA GeForce RTX 4060 [Discrete]
+        Memory: 11.95 GiB / 15.40 GiB (78%)
+        Swap: 4.38 GiB / 23.70 GiB (18%)
+        Disk (/): 55.25 GiB / 103.66 GiB (53%) - ext4
+        Disk (/home): 397.69 GiB / 465.76 GiB (85%) - btrfs
+        Disk (/srv/storage): 525.48 GiB / 908.22 GiB (58%) - btrfs
+        Local IP (wlan0): 192.168.0.213/24
+        Locale: en_US.UTF-8
+        ---------------------------------
+    """)
+
+
+
+# Notificaciones
+k_agent.tool(instrument_tool("notify_user", notification.notify_user))
+
+# Control de ventanas
+k_agent.tool(instrument_tool("list_windows", window.list_windows))
+k_agent.tool(instrument_tool("focus_window", window.focus_window))
+k_agent.tool(instrument_tool("close_window", window.close_window))
+
+# Control de media
+k_agent.tool(instrument_tool("control_media", media.control_media))
+k_agent.tool(instrument_tool("get_now_playing", media.get_now_playing))
+k_agent.tool(instrument_tool("list_media_players", media.list_media_players))
+k_agent.tool(instrument_tool("seek", media.seek))
+k_agent.tool(instrument_tool("set_repeat", media.set_repeat))
+k_agent.tool(instrument_tool("toggle_shuffle", media.toggle_shuffle))
+k_agent.tool(instrument_tool("set_volume", media.set_volume))
+
+
