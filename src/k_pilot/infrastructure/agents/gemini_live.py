@@ -92,6 +92,7 @@ class GeminiLiveServer:
                 async with self.client.aio.live.connect(
                     model=self.model_id, config=config
                 ) as session:
+                    self._session = session
                     print(
                         "🤖 Gemini Live Conectado (Escritorio KDE). Escribe 'salir' para terminar."
                     )
@@ -220,3 +221,23 @@ class GeminiLiveServer:
                 self.stream.close()
             if hasattr(self, "audio"):
                 self.audio.terminate()
+
+    async def trigger_voice_activation(self) -> None:
+        """Activado externamente (ej: por Wake Word o un botón)."""
+        logger.info("live.voice_activation.triggered")
+        import sys
+        
+        sys.stdout.write("\r🔔 ¡Activación por voz detectada!\n👤 Tú: ")
+        sys.stdout.flush()
+
+        if hasattr(self, "_session") and self._session:
+            try:
+                await self._session.send_client_content(
+                    turns=Content(
+                        role="user",
+                        parts=[Part(text="[SISTEMA]: El usuario te ha despertado usando el Wake Word. Salúdalo muy brevemente listo para ayudar.")],
+                    )
+                )
+            except Exception as e:
+                logger.error("live.voice_activation.failed", error=str(e))
+
