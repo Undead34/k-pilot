@@ -5,9 +5,15 @@ build/
 dist/
 wheels/
 *.egg-info
+live
 
 # Virtual environments
 .venv
+
+# Secrets
 .env
-live
+.env.*
+!.env.example
+
+# assets
 *.wav
