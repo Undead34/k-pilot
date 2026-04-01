@@ -159,3 +159,4 @@ See [LICENSE](LICENSE) for full terms.
 <div align="center">
   <sub>Built with ❤️ for the KDE community. Not affiliated with KDE e.V.</sub>
 </div>
+# k-pilot
