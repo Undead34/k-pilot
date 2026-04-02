@@ -9,9 +9,10 @@ from functools import wraps
 from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
 from uuid import uuid4
 
-from k_pilot.infrastructure.logging import get_logger, logging_context
+import structlog
+from structlog.contextvars import bound_contextvars
 
-logger = get_logger(layer="infrastructure", component="observability")
+logger = structlog.get_logger("k-pilot.observability")
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -77,7 +78,7 @@ def instrument_tool(
         )
         start_ns = time.perf_counter_ns()
 
-        with logging_context(tool_name=tool_name, tool_call_id=invocation_id):
+        with bound_contextvars(tool_name=tool_name, tool_call_id=invocation_id):
             try:
                 result = await fn(*args, **kwargs)
             except Exception as exc:
@@ -99,7 +100,6 @@ def instrument_tool(
         )
         return result
 
-    wrapped.__signature__ = signature
     return wrapped
 
 
@@ -111,7 +111,7 @@ def summarize_usage(result: Any) -> dict[str, Any]:
         return {}
     if hasattr(usage, "model_dump"):
         try:
-            return usage.model_dump(exclude_none=True)
+            return usage.model_dump(exclude_none=True)  # type: ignore
         except Exception:
             return {"usage": str(usage)}
     if isinstance(usage, dict):
@@ -152,7 +152,7 @@ async def run_with_observability(
         command_chars=len(telemetry.user_command),
     )
 
-    with logging_context(
+    with bound_contextvars(
         session_id=telemetry.session_id,
         turn_id=turn_id,
         transport=telemetry.transport,

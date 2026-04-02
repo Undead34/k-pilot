@@ -46,9 +46,11 @@ from google.genai.types import (
     VoiceConfig,
 )
 
+import structlog
+from structlog.contextvars import bound_contextvars
+
 from k_pilot.application.agent import k_agent
 from k_pilot.application.deps import AppDeps
-from k_pilot.infrastructure.logging import get_logger, logging_context
 from k_pilot.infrastructure.observability import (
     AgentRunTelemetry,
     run_with_observability,
@@ -57,7 +59,7 @@ from k_pilot.infrastructure.observability import (
 if TYPE_CHECKING:
     from google.genai.live import AsyncSession  # type: ignore[import]
 
-logger = get_logger(layer="infrastructure", component="gemini_live")
+logger = structlog.get_logger("k-pilot.gemini_live")
 
 
 class GeminiLiveError(Exception):
@@ -263,8 +265,8 @@ class GeminiLiveServer:
     """
 
     EXIT_COMMANDS: ClassVar[frozenset[str]] = frozenset({"quit", "exit", "salir"})
-    AUDIO_QUEUE_SIZE: ClassVar[Final[int]] = 100  # Max pending audio chunks
-    SHUTDOWN_SIGNAL: ClassVar[Final[None]] = None  # Sentinel for audio queue
+    AUDIO_QUEUE_SIZE: ClassVar[int] = 100  # Max pending audio chunks
+    SHUTDOWN_SIGNAL: ClassVar[None] = None  # Sentinel for audio queue
 
     def __init__(
         self,
@@ -388,7 +390,7 @@ class GeminiLiveServer:
         """Main session orchestration."""
         live_config = self._config.to_live_config()
 
-        with logging_context(
+        with bound_contextvars(
             session_id=self._session_id,
             transport="gemini_live",
             provider="google",
@@ -421,9 +423,7 @@ class GeminiLiveServer:
             session: Active Gemini Live session.
         """
         # Audio queue for decoupling network receive from playback
-        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue(
-            maxsize=self.AUDIO_QUEUE_SIZE
-        )
+        audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=100)
 
         # Start audio worker
         audio_worker_task = asyncio.create_task(
@@ -441,7 +441,7 @@ class GeminiLiveServer:
             pass  # Graceful shutdown
         finally:
             # Signal audio worker to stop
-            await audio_queue.put(self.SHUTDOWN_SIGNAL)
+            await audio_queue.put(None)
             await audio_worker_task
 
     async def _input_loop(self, session: AsyncSession) -> None:
@@ -628,7 +628,7 @@ class GeminiLiveServer:
             try:
                 data = await queue.get()
 
-                if data is self.SHUTDOWN_SIGNAL:
+                if data is None:
                     break
 
                 await self._audio_player.play_chunk(data)

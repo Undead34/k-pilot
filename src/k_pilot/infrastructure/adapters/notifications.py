@@ -19,19 +19,36 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
 from dasbus.connection import SessionMessageBus
+import structlog
 from gi.repository import GLib  # type: ignore[import]
 
 from k_pilot.domain.models import Notification, Priority, Result
 from k_pilot.domain.ports import NotificationPort
-from k_pilot.infrastructure.logging import get_logger
 
 if TYPE_CHECKING:
     from dasbus.client.proxy import InterfaceProxy
 
-logger = get_logger(layer="infrastructure", component="notification_adapter")
+
+class NotificationProxy(Protocol):
+    """Protocol for D-Bus Notifications interface."""
+
+    def Notify(
+        self,
+        app_name: str,
+        replaces_id: int,
+        app_icon: str,
+        summary: str,
+        body: str,
+        actions: list[str],
+        hints: dict[str, Any],
+        expire_timeout: int,
+    ) -> int: ...
+
+
+logger = structlog.get_logger("k-pilot.notification_adapter")
 
 
 class NotificationError(Exception):
@@ -132,12 +149,12 @@ class FreedesktopNotificationAdapter(NotificationPort):
     """
 
     # Class constants following Freedesktop spec
-    SERVICE_NAME: ClassVar[Final[str]] = "org.freedesktop.Notifications"
-    OBJECT_PATH: ClassVar[Final[str]] = "/org/freedesktop/Notifications"
-    INTERFACE_NAME: ClassVar[Final[str]] = "org.freedesktop.Notifications"
+    SERVICE_NAME: ClassVar[str] = "org.freedesktop.Notifications"
+    OBJECT_PATH: ClassVar[str] = "/org/freedesktop/Notifications"
+    INTERFACE_NAME: ClassVar[str] = "org.freedesktop.Notifications"
 
     # Priority mapping: Domain Priority -> Spec UrgencyLevel
-    _PRIORITY_MAP: ClassVar[Final[dict[Priority, UrgencyLevel]]] = {
+    _PRIORITY_MAP: ClassVar[dict[Priority, UrgencyLevel]] = {
         Priority.LOW: UrgencyLevel.LOW,
         Priority.NORMAL: UrgencyLevel.NORMAL,
         Priority.HIGH: UrgencyLevel.CRITICAL,
@@ -145,7 +162,7 @@ class FreedesktopNotificationAdapter(NotificationPort):
     }
 
     # Application identifier for .desktop file association
-    _DESKTOP_ENTRY: ClassVar[Final[str]] = "k-pilot"
+    _DESKTOP_ENTRY: ClassVar[str] = "k-pilot"
 
     def __init__(self, bus: SessionMessageBus | None = None) -> None:
         """
@@ -162,7 +179,7 @@ class FreedesktopNotificationAdapter(NotificationPort):
             explicitly provided.
         """
         self._bus: Final[SessionMessageBus] = bus or SessionMessageBus()
-        self._proxy: InterfaceProxy | None = None
+        self._proxy: NotificationProxy | None = None
         self._connect()
 
     def _connect(self) -> None:
@@ -178,9 +195,13 @@ class FreedesktopNotificationAdapter(NotificationPort):
             ERROR: On connection failure with exception details.
         """
         try:
-            self._proxy = self._bus.get_proxy(
-                service_name=self.SERVICE_NAME,
-                object_path=self.OBJECT_PATH,
+            self._proxy = cast(
+                "NotificationProxy",
+                self._bus.get_proxy(
+                    service_name=self.SERVICE_NAME,
+                    object_path=self.OBJECT_PATH,
+                    interface_name=self.INTERFACE_NAME,
+                ),
             )
             logger.info(
                 "notification_adapter.connected",
@@ -195,7 +216,6 @@ class FreedesktopNotificationAdapter(NotificationPort):
             )
             self._proxy = None
 
-    @property
     def is_available(self) -> bool:
         """
         Check if the notification service is available.
@@ -272,7 +292,7 @@ class FreedesktopNotificationAdapter(NotificationPort):
             >>> if result.success:
             ...     print(f"Notification ID: {result.data['notification_id']}")
         """
-        if not self.is_available:
+        if not self.is_available():
             logger.warning(
                 "notification_adapter.unavailable",
                 attempted_send=True,
@@ -283,7 +303,7 @@ class FreedesktopNotificationAdapter(NotificationPort):
             )
 
         # Type narrowing: mypy knows self._proxy is not None here
-        proxy = cast("InterfaceProxy", self._proxy)
+        proxy = cast("NotificationProxy", self._proxy)
 
         try:
             hints = self._build_hints(notification)

@@ -1,17 +1,19 @@
 import asyncio
 from uuid import uuid4
 
+import structlog
+from structlog.contextvars import bound_contextvars
+
 import websockets
 
 from k_pilot.application.agent import k_agent
 from k_pilot.application.deps import AppDeps
-from k_pilot.infrastructure.logging import get_logger, logging_context
 from k_pilot.infrastructure.observability import (
     AgentRunTelemetry,
     run_with_observability,
 )
 
-logger = get_logger(layer="infrastructure", component="ws_server")
+logger = structlog.get_logger("k-pilot.ws_server")
 
 
 class KPilotWebSocketServer:
@@ -29,7 +31,7 @@ class KPilotWebSocketServer:
         message_history = []
 
         try:
-            with logging_context(
+            with bound_contextvars(
                 session_id=session_id,
                 transport="websocket",
                 provider="deepseek",

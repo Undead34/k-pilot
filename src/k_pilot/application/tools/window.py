@@ -1,9 +1,9 @@
+import structlog
 from pydantic_ai import RunContext
 
 from k_pilot.application.deps import AppDeps
-from k_pilot.infrastructure.logging import get_logger
 
-logger = get_logger(layer="application", component="window_tools")
+logger = structlog.get_logger("k-pilot.window_tools")
 
 
 async def list_windows(ctx: RunContext[AppDeps]) -> str:

@@ -19,10 +19,11 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
 
 from dasbus.connection import SessionMessageBus
 from dasbus.error import DBusError
+import structlog
 from gi.repository import GLib  # type: ignore[import]
 
 from k_pilot.domain.models import (
@@ -34,12 +35,38 @@ from k_pilot.domain.models import (
     ShuffleMode,
 )
 from k_pilot.domain.ports import MediaControlPort
-from k_pilot.infrastructure.logging import get_logger
 
 if TYPE_CHECKING:
     from dasbus.client.proxy import InterfaceProxy
 
-logger = get_logger(layer="infrastructure", component="mpris_adapter")
+
+class PropertiesProxy(Protocol):
+    """Protocol for D-Bus Properties interface."""
+
+    def Get(self, interface: str, property: str) -> Any: ...
+    def Set(self, interface: str, property: str, value: Any) -> None: ...
+
+
+class PlayerProxy(Protocol):
+    """Protocol for MPRIS Player interface."""
+
+    def Play(self) -> None: ...
+    def Pause(self) -> None: ...
+    def PlayPause(self) -> None: ...
+    def Next(self) -> None: ...
+    def Previous(self) -> None: ...
+    def Stop(self) -> None: ...
+    def Seek(self, offset: int) -> None: ...
+    def SetPosition(self, track_id: str, position: int) -> None: ...
+
+
+class DbusProxy(Protocol):
+    """Protocol for D-Bus daemon interface."""
+
+    def ListNames(self) -> list[str]: ...
+
+
+logger = structlog.get_logger("k-pilot.mpris_adapter")
 
 
 class MprisError(Exception):
@@ -169,20 +196,20 @@ class MprisMediaAdapter(MediaControlPort):
     """
 
     # D-Bus constants following MPRIS2 specification
-    PLAYER_PATH: ClassVar[Final[str]] = "/org/mpris/MediaPlayer2"
-    PLAYER_IFACE: ClassVar[Final[str]] = "org.mpris.MediaPlayer2.Player"
-    PROPERTIES_IFACE: ClassVar[Final[str]] = "org.freedesktop.DBus.Properties"
-    DBUS_IFACE: ClassVar[Final[str]] = "org.freedesktop.DBus"
-    MPRIS_PREFIX: ClassVar[Final[str]] = "org.mpris.MediaPlayer2."
+    PLAYER_PATH: ClassVar[str] = "/org/mpris/MediaPlayer2"
+    PLAYER_IFACE: ClassVar[str] = "org.mpris.MediaPlayer2.Player"
+    PROPERTIES_IFACE: ClassVar[str] = "org.freedesktop.DBus.Properties"
+    DBUS_IFACE: ClassVar[str] = "org.freedesktop.DBus"
+    MPRIS_PREFIX: ClassVar[str] = "org.mpris.MediaPlayer2."
 
     # Status mappings: MPRIS2 string -> Domain enum
-    _PLAYBACK_STATUS_MAP: ClassVar[Final[dict[str, PlaybackStatus]]] = {
+    _PLAYBACK_STATUS_MAP: ClassVar[dict[str, PlaybackStatus]] = {
         "Playing": PlaybackStatus.PLAYING,
         "Paused": PlaybackStatus.PAUSED,
         "Stopped": PlaybackStatus.STOPPED,
     }
 
-    _REPEAT_MODE_MAP: ClassVar[Final[dict[str, RepeatMode]]] = {
+    _REPEAT_MODE_MAP: ClassVar[dict[str, RepeatMode]] = {
         "None": RepeatMode.NONE,
         "Track": RepeatMode.TRACK,
         "Playlist": RepeatMode.PLAYLIST,
@@ -216,6 +243,7 @@ class MprisMediaAdapter(MediaControlPort):
         """
         try:
             proxy = self._get_dbus_proxy()
+            # type: ignore[reportCallIssue,reportOptionalCall]
             proxy.ListNames()
             logger.debug("media_adapter.available_check.passed")
             return True
@@ -686,10 +714,10 @@ class MprisMediaAdapter(MediaControlPort):
     # Private Helper Methods
     # -------------------------------------------------------------------------
 
-    def _get_dbus_proxy(self) -> InterfaceProxy:
+    def _get_dbus_proxy(self) -> DbusProxy:
         """Get proxy for D-Bus daemon itself."""
         return cast(
-            "InterfaceProxy",
+            "DbusProxy",
             self._bus.get_proxy(
                 service_name=self.DBUS_IFACE,
                 object_path="/org/freedesktop/DBus",
@@ -697,10 +725,10 @@ class MprisMediaAdapter(MediaControlPort):
             ),
         )
 
-    def _get_player_proxy(self, bus_name: str) -> InterfaceProxy:
+    def _get_player_proxy(self, bus_name: str) -> PlayerProxy:
         """Get player control interface proxy."""
         return cast(
-            "InterfaceProxy",
+            "PlayerProxy",
             self._bus.get_proxy(
                 service_name=bus_name,
                 object_path=self.PLAYER_PATH,
@@ -708,10 +736,10 @@ class MprisMediaAdapter(MediaControlPort):
             ),
         )
 
-    def _get_properties_proxy(self, bus_name: str) -> InterfaceProxy:
+    def _get_properties_proxy(self, bus_name: str) -> PropertiesProxy:
         """Get properties interface proxy for the player."""
         return cast(
-            "InterfaceProxy",
+            "PropertiesProxy",
             self._bus.get_proxy(
                 service_name=bus_name,
                 object_path=self.PLAYER_PATH,
@@ -730,7 +758,9 @@ class MprisMediaAdapter(MediaControlPort):
             proxy = self._get_dbus_proxy()
             names = proxy.ListNames()
             mpris_buses = [
-                str(name) for name in names if str(name).startswith(self.MPRIS_PREFIX)
+                str(name)
+                for name in names
+                if str(name).startswith("org.mpris.MediaPlayer2.")
             ]
 
             # Sort by priority (highest first)
@@ -928,6 +958,7 @@ class MprisMediaAdapter(MediaControlPort):
 
         try:
             proxy = self._get_player_proxy(player)
+            # type: ignore[reportCallIssue,reportOptionalCall]
             getattr(proxy, method)()
 
             logger.info(
@@ -952,7 +983,7 @@ class MprisMediaAdapter(MediaControlPort):
     async def _force_previous_track(
         self,
         player: str,
-        player_proxy: InterfaceProxy,
+        player_proxy: PlayerProxy,
     ) -> None:
         """
         Force previous track by seeking to start first.
@@ -1027,22 +1058,24 @@ class MprisMediaAdapter(MediaControlPort):
     # -------------------------------------------------------------------------
 
     def _safe_get_prop(
-        self, props: InterfaceProxy, prop_name: str, default: Any
+        self, props: PropertiesProxy, prop_name: str, default: Any
     ) -> Any:
         """Safely get and unpack a D-Bus property."""
         try:
+            # type: ignore[reportCallIssue,reportOptionalCall]
             return props.Get(self.PLAYER_IFACE, prop_name).unpack()
         except Exception:
             return default
 
     def _safe_get_bool(
         self,
-        props: InterfaceProxy,
+        props: PropertiesProxy,
         prop_name: str,
         default: bool,
     ) -> bool:
         """Safely get boolean property with default."""
         try:
+            # type: ignore[reportCallIssue,reportOptionalCall]
             return bool(props.Get(self.PLAYER_IFACE, prop_name).unpack())
         except Exception:
             return default

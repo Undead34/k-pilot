@@ -1,12 +1,12 @@
 from typing import Literal
 
+import structlog
 from pydantic_ai import RunContext
 
 from k_pilot.application.deps import AppDeps
 from k_pilot.domain.models import Notification, Priority
-from k_pilot.infrastructure.logging import get_logger
 
-logger = get_logger(layer="application", component="notification_tools")
+logger = structlog.get_logger("k-pilot.notification_tools")
 
 
 async def notify_user(

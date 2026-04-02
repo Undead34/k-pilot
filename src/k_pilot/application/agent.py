@@ -1,14 +1,14 @@
 import inspect
 
+import structlog
 from pydantic_ai import Agent
 
 from k_pilot.application.deps import AppDeps
 from k_pilot.application.tools import media, notification, window
-from k_pilot.infrastructure.logging import get_logger
 from k_pilot.infrastructure.observability import instrument_tool
 from k_pilot.prompts import SYSTEM
 
-logger = get_logger(layer="application", component="agent")
+logger = structlog.get_logger("k-pilot.agent")
 
 # Simple por defecto, potente cuando se necesita
 k_agent = Agent[AppDeps](
@@ -51,7 +51,6 @@ def system_info(_):
     """)
 
 
-
 # Notificaciones
 k_agent.tool(instrument_tool("notify_user", notification.notify_user))
 
@@ -68,5 +67,3 @@ k_agent.tool(instrument_tool("seek", media.seek))
 k_agent.tool(instrument_tool("set_repeat", media.set_repeat))
 k_agent.tool(instrument_tool("toggle_shuffle", media.toggle_shuffle))
 k_agent.tool(instrument_tool("set_volume", media.set_volume))
-
-

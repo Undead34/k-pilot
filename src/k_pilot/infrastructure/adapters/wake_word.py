@@ -26,12 +26,13 @@ import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from queue import Empty
-from typing import Any, ClassVar, Final, Protocol
+from typing import Any, ClassVar, Final, Protocol, Callable
+
+import structlog
 
 from k_pilot.domain.ports import WakeWordPort
-from k_pilot.infrastructure.logging import get_logger
 
-logger = get_logger(layer="infrastructure", component="local_wake")
+logger = structlog.get_logger("k-pilot.local_wake")
 
 
 class WakeWordCallback(Protocol):
@@ -160,7 +161,7 @@ class LocalWakeAdapter(WakeWordPort):
     """
 
     # lwake detection parameters
-    DEFAULT_TIMEOUT: ClassVar[Final[float]] = 30.0  # Seconds to wait for thread cleanup
+    DEFAULT_TIMEOUT: ClassVar[float] = 30.0  # Seconds to wait for thread cleanup
 
     def __init__(
         self,
@@ -184,7 +185,7 @@ class LocalWakeAdapter(WakeWordPort):
             ValueError: If configuration parameters are invalid.
         """
         if config is not None:
-            self._config: Final[WakeWordConfig] = config
+            self._config: WakeWordConfig = config
         else:
             # Backward compatibility with positional args
             self._config = WakeWordConfig(
@@ -223,7 +224,9 @@ class LocalWakeAdapter(WakeWordPort):
         """Get the current immutable configuration."""
         return self._config
 
-    async def start_listening(self, on_detected: WakeWordCallback) -> None:
+    async def start_listening(
+        self, on_detected: Callable[[dict[str, Any], Any], None]
+    ) -> None:
         """
         Start wake word detection in background.
 
@@ -345,7 +348,7 @@ class LocalWakeAdapter(WakeWordPort):
         if self._task and not self._task.done():
             self._task.cancel()
             try:
-                await asyncio.wait_for(self._task, timeout=self.DEFAULT_TIMEOUT)
+                await asyncio.wait_for(self._task, timeout=30.0)
             except asyncio.TimeoutError:
                 logger.warning("wakeword.stop_listening.timeout_waiting_for_task")
             except asyncio.CancelledError:

@@ -1,78 +1,146 @@
-"""Configuracion centralizada de logging estructurado."""
+"""Configuración centralizada de logging estructurado."""
 
 import logging
 import os
 import sys
-from contextlib import contextmanager
-from typing import Any
+from dataclasses import dataclass
+from enum import Enum
 
 import structlog
-from structlog.contextvars import bind_contextvars, bound_contextvars, clear_contextvars
 
 
-def _env_flag(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+class LogLevel(str, Enum):
+    """
+    Niveles de log válidos según el estándar de logging de Python.
+
+    Usamos str+Enum para que Pydantic (si lo usas) o cualquier validador
+    pueda comparar directamente: LogLevel.DEBUG == "DEBUG" → True
+    """
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
 
 
-def configure_logging() -> None:
-    """Inicializa logging estructurado para toda la aplicacion."""
-    level_name = os.getenv("K_PILOT_LOG_LEVEL", os.getenv("LOG_LEVEL", "INFO")).upper()
-    json_logs = _env_flag("K_PILOT_LOG_JSON", default=False)
-    log_level = getattr(logging, level_name, logging.INFO)
+@dataclass(frozen=True)
+class LoggingConfig:
+    """
+    Configuración inmutable de logging.
 
-    timestamper = structlog.processors.TimeStamper(fmt="iso", utc=False)
-    shared_processors = [
-        structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
-        timestamper,
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
+    frozen=True: Una vez creada, no se puede modificar (thread-safe).
+    """
+
+    level: LogLevel = LogLevel.INFO
+    json_format: bool = False
+
+    @property
+    def python_level(self) -> int:
+        """Convierte el enum al valor numérico de logging (10, 20, 30...)."""
+        return getattr(logging, self.level.value)
+
+
+def load_logging_config() -> LoggingConfig:
+    """
+    Carga configuración desde variables de entorno con validación estricta.
+
+    Orden de prioridad:
+        1. K_PILOT_LOG_LEVEL (específico de tu app)
+        2. LOG_LEVEL (genérico, fallback común)
+        3. "INFO" (default seguro)
+
+    Raises:
+        ValueError: Si el nivel especificado no existe en LogLevel.
+    """
+    # --- 1. Obtener valor crudo del entorno ---
+    # Buscamos primero la variable específica, luego la genérica
+    raw_value = os.getenv("K_PILOT_LOG_LEVEL") or os.getenv("LOG_LEVEL")
+
+    # --- 2. Aplicar default si no hay nada ---
+    if raw_value is None:
+        return LoggingConfig(level=LogLevel.INFO, json_format=False)
+
+    # --- 3. Limpiar el valor (strip + uppercase para case-insensitive) ---
+    cleaned = raw_value.strip().upper()
+
+    # --- 4. Validación estricta ---
+    # Verificamos que el valor limpio exista en nuestro Enum
+    if cleaned not in LogLevel._value2member_map_:
+        # Si no existe, listamos los válidos para ayudar al usuario
+        valid_levels = [level.value for level in LogLevel]
+        raise ValueError(
+            f"Variable de entorno LOG_LEVEL inválida: '{raw_value}'\\n"
+            f"Valor recibido tras limpieza: '{cleaned}'\\n"
+            f"Valores permitidos: {', '.join(valid_levels)}"
+        )
+
+    # --- 5. Construir la configuración ---
+    level = LogLevel(cleaned)  # Creamos el enum desde el string validado
+
+    # Leemos JSON format (booleano simple)
+    json_raw = os.getenv("K_PILOT_LOG_JSON", "").lower()
+    json_format = json_raw in ("1", "true", "yes", "on")
+
+    return LoggingConfig(level=level, json_format=json_format)
+
+
+def configure_logging(config: LoggingConfig | None = None) -> LoggingConfig:
+    """
+    Inicializa structlog con la configuración proporcionada o la carga del entorno.
+
+    Args:
+        config: Configuración pre-construida. Si es None, se carga del entorno.
+
+    Returns:
+        La configuración efectiva usada (útil para debugging).
+    """
+    if config is None:
+        config = load_logging_config()
+
+    # --- Configurar procesadores según modo ---
+    processors = [
+        structlog.contextvars.merge_contextvars,  # Primero: carga contexto thread-local
+        structlog.stdlib.add_log_level,  # Añade 'level': 'info'
+        structlog.stdlib.add_logger_name,  # Añade 'logger': 'nombre'
+        structlog.processors.TimeStamper(fmt="iso", utc=config.json_format),
     ]
 
-    logging.basicConfig(
-        level=log_level, format="%(message)s", stream=sys.stderr, force=True
-    )
+    if config.json_format:
+        # Modo Producción: JSON estructurado para parsers
+        processors.extend(
+            [
+                structlog.processors.StackInfoRenderer(),
+                structlog.processors.format_exc_info,  # Formatea excepciones como string
+                structlog.processors.dict_tracebacks,  # O como objeto estructurado (mejor para JSON)
+                structlog.processors.JSONRenderer(),  # Output final: JSON
+            ]
+        )
+        factory = structlog.stdlib.LoggerFactory()
 
+        # Configurar logging de stdlib para que no interfiera
+        logging.basicConfig(
+            level=config.python_level,
+            format="%(message)s",  # structlog maneja el formato
+            stream=sys.stderr,
+            force=True,
+        )
+    else:
+        # Modo Desarrollo: Consola legible con colores
+        processors.extend(
+            [
+                structlog.dev.set_exc_info,  # Marca exc_info para ConsoleRenderer
+                structlog.dev.ConsoleRenderer(colors=True, pad_level=False),
+            ]
+        )
+        factory = structlog.PrintLoggerFactory(sys.stderr)
+
+    # --- Aplicar configuración a structlog ---
     structlog.configure(
-        processors=shared_processors
-        + [
-            structlog.processors.EventRenamer("event"),
-            (
-                structlog.processors.JSONRenderer()
-                if json_logs
-                else structlog.dev.ConsoleRenderer()
-            ),
-        ],
-        wrapper_class=structlog.stdlib.BoundLogger,
-        logger_factory=structlog.stdlib.LoggerFactory(),
+        processors=processors,
+        wrapper_class=structlog.make_filtering_bound_logger(config.python_level),
+        logger_factory=factory,
         cache_logger_on_first_use=True,
     )
 
-
-def clear_logging_context() -> None:
-    """Limpia el contexto request-scoped asociado al logger."""
-    clear_contextvars()
-
-
-def bind_logging_context(**values: Any) -> None:
-    """Bindea pares clave/valor al contexto actual si tienen valor."""
-    clean_values = {key: value for key, value in values.items() if value is not None}
-    if clean_values:
-        bind_contextvars(**clean_values)
-
-
-@contextmanager
-def logging_context(**values: Any):
-    """Context manager para agregar contexto temporal a los logs."""
-    clean_values = {key: value for key, value in values.items() if value is not None}
-    with bound_contextvars(**clean_values):
-        yield
-
-
-def get_logger(*, layer: str, component: str):
-    """Crea un logger etiquetado con la capa y el componente."""
-    return structlog.get_logger(component).bind(layer=layer, component=component)
+    return config

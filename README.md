@@ -1,6 +1,6 @@
 <div align="center">
-  <h1>K-Pilot 🤖</h1>
-  <p><strong>AI Assistant for KDE Plasma 6 — Voice-controlled desktop automation</strong></p>
+  <h1>K-Pilot</h1>
+  <p><strong>AI Assistant for KDE Plasma 6</strong></p>
   <p>Built for Linux power users who want hands-free control over their Plasma desktop.</p>
   <br>
 
@@ -44,7 +44,7 @@ K-Pilot follows **Hexagonal Architecture** (Ports & Adapters):
 │    (Agent Orchestration, Tools)     │
 ├─────────────────────────────────────┤
 │           Domain Layer              │
-│   (Models, Ports, Wayland abstractions) │
+│     (Models, Ports, Services)       │
 ├─────────────────────────────────────┤
 │       Infrastructure Layer          │
 │  (Gemini Live, KWin, MPRIS, D-Bus)  │
@@ -78,7 +78,7 @@ This keeps the domain clean and AI providers replaceable.
 
 ```bash
 # Clone and enter directory
-git clone <your-repo> && cd k-pilot
+git clone https://github.com/Undead34/k-pilot && cd k-pilot
 
 # Create venv with system site packages (for PyGObject/D-Bus)
 deactivate 2>/dev/null || true
@@ -159,4 +159,3 @@ See [LICENSE](LICENSE) for full terms.
 <div align="center">
   <sub>Built with ❤️ for the KDE community. Not affiliated with KDE e.V.</sub>
 </div>
-# k-pilot

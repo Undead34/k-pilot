@@ -2,13 +2,13 @@
 
 from typing import Literal
 
+import structlog
 from pydantic_ai import RunContext
 
 from k_pilot.application.deps import AppDeps
 from k_pilot.domain.models import PlaybackStatus, RepeatMode, ShuffleMode
-from k_pilot.infrastructure.logging import get_logger
 
-logger = get_logger(layer="application", component="media_tools")
+logger = structlog.get_logger("k-pilot.media_tools")
 
 
 async def control_media(

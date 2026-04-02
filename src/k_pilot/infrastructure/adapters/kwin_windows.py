@@ -26,14 +26,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, ClassVar, Final
 
+import structlog
+
 from k_pilot.domain.models import Result, WindowInfo
 from k_pilot.domain.ports import WindowManagerPort
-from k_pilot.infrastructure.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-logger = get_logger(layer="infrastructure", component="kwin_adapter")
+logger = structlog.get_logger("k-pilot.kwin_adapter")
 
 
 class KWinAdapterError(Exception):
@@ -97,7 +98,7 @@ class KdotoolResult:
     success: bool
     stdout: str
     stderr: str = ""
-    return_code: int = 0
+    return_code: int | None = 0
 
     @property
     def output(self) -> str:
@@ -118,15 +119,15 @@ class KdotoolExecutor:
         default_timeout: Default timeout in seconds (default: 5).
     """
 
-    DEFAULT_TIMEOUT: ClassVar[Final[int]] = 5
-    MAX_RETRIES: ClassVar[Final[int]] = 1
-    RETRY_DELAY: ClassVar[Final[float]] = 0.1
+    DEFAULT_TIMEOUT: ClassVar[int] = 5
+    MAX_RETRIES: ClassVar[int] = 1
+    RETRY_DELAY: ClassVar[float] = 0.1
 
     def __init__(
         self,
         executable_path: str,
         max_concurrent: int = 3,
-        default_timeout: int = DEFAULT_TIMEOUT,
+        default_timeout: int = 5,
     ) -> None:
         self._executable: Final[str] = executable_path
         self._semaphore: Final[asyncio.Semaphore] = asyncio.Semaphore(max_concurrent)
@@ -142,7 +143,7 @@ class KdotoolExecutor:
         self,
         *args: str,
         timeout: int | None = None,
-        retries: int = MAX_RETRIES,
+        retries: int = 1,
     ) -> KdotoolResult:
         """
         Execute kdotool command with retry logic.
@@ -179,7 +180,7 @@ class KdotoolExecutor:
                         attempt=attempt + 1,
                         delay=self.RETRY_DELAY,
                     )
-                    await asyncio.sleep(self.RETRY_DELAY)
+                    await asyncio.sleep(0.1)
                     last_result = result
                     continue
 
@@ -283,12 +284,12 @@ class KWinWindowAdapter(WindowManagerPort):
     """
 
     # kdotool version compatibility
-    KDOTOOL_MIN_VERSION: ClassVar[Final[str]] = "0.2.2"
-    MAX_CONCURRENT_OPS: ClassVar[Final[int]] = 3
-    DEFAULT_TIMEOUT: ClassVar[Final[int]] = 5
+    KDOTOOL_MIN_VERSION: ClassVar[str] = "0.2.2"
+    MAX_CONCURRENT_OPS: ClassVar[int] = 3
+    DEFAULT_TIMEOUT: ClassVar[int] = 5
 
     # Window ID validation
-    WINDOW_ID_PREFIX: ClassVar[Final[str]] = "{"
+    WINDOW_ID_PREFIX: ClassVar[str] = "{"
 
     def __init__(self, bus: object | None = None) -> None:
         """
@@ -304,8 +305,8 @@ class KWinWindowAdapter(WindowManagerPort):
         if self._available and self._executable:
             self._executor = KdotoolExecutor(
                 executable_path=self._executable,
-                max_concurrent=self.MAX_CONCURRENT_OPS,
-                default_timeout=self.DEFAULT_TIMEOUT,
+                max_concurrent=3,
+                default_timeout=5,
             )
             logger.info(
                 "kwin_adapter.initialized",
@@ -370,7 +371,7 @@ class KWinWindowAdapter(WindowManagerPort):
         window_ids = [
             line.strip()
             for line in result.output.splitlines()
-            if line.strip().startswith(self.WINDOW_ID_PREFIX)
+            if line.strip().startswith("{")
         ]
 
         if not window_ids:
@@ -678,6 +679,19 @@ class KWinWindowAdapter(WindowManagerPort):
         Returns:
             WindowInfo with best-effort data (falls back to defaults on error).
         """
+        if not self._executor:
+            logger.error(
+                "window.info_exception", id=window_id, error="Executor not initialized"
+            )
+            # Return placeholder to avoid breaking list_windows()
+            return WindowInfo(
+                id=window_id,
+                title="Error retrieving info",
+                app_name="unknown",
+                is_active=False,
+                is_minimized=False,
+                desktop=None,
+            )
         try:
             # Fetch all properties concurrently
             name_task = self._executor.execute(
