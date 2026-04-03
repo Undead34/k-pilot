@@ -3,13 +3,23 @@ import sys
 from typing import TYPE_CHECKING
 
 from k_pilot import bootstrap
+from k_pilot.bootstrap.container import container
 
 if TYPE_CHECKING:
     from structlog.stdlib import BoundLogger
 
 
 async def main_async() -> int:
+    # Levanta D-Bus, MPRIS, carga tools
     bootstrap()
+
+    agent = container.agent
+    deps = container.deps
+
+    # ws_server = KPilotWebSocketServer(agent=agent, deps=deps)
+    # gemini_server = GeminiLiveServer(agent=agent, deps=deps)
+
+    # await asyncio.gather(ws_server.start(), gemini_server.start())
 
     return 0
 
