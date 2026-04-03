@@ -19,37 +19,68 @@ dependencies = [
     "pydantic-ai>=1.71.0",
     "pyee>=13.0.1",
     "pygobject>=3.56.2",
-    "python-dotenv>=1.2.2",
     "structlog>=25.5.0",
     "websockets>=16.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "basedpyright>=1.28.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.25.0",
+    "ruff>=0.11.0",
 ]
 
 [project.scripts]
 k-pilot = "k_pilot.__main__:main"
 
 [build-system]
-requires = ["uv_build>=0.10.11,<0.11.0"]
+requires = ["uv_build>=0.11.3,<0.12"]
 build-backend = "uv_build"
 
+# ==========================================
+# RUFF
+# ==========================================
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ==========================================
+# BASEDPYRIGHT
+# ==========================================
 [tool.basedpyright]
 typeCheckingMode = "standard"
-include = ["src"]
-exclude = ["**/live/**", "**/test_*.py"]
 pythonVersion = "3.13"
+include = ["src"]
+exclude = ["**/assets/**", "**/__pycache__"]
 
-# Ignorar que faltan stubs para librerías de sistema
-reportMissingTypeStubs = false
-reportUnknownMemberType = false
-reportUnknownVariableType = false
-reportUnknownArgumentType = false
-reportUnknownParameterType = false
-reportAny = false
-reportMissingImports = "warning"
-reportAttributeAccessIssue = "error"
+reportMissingImports = "error"
+reportMissingTypeStubs = "none"
 reportReturnType = "error"
 reportCallIssue = "error"
-reportOptionalCall = "error"
+reportAny = "warning"
+reportUnknownMemberType = "warning"
+reportUnknownVariableType = "warning"
+reportUnknownArgumentType = "warning"
+reportUnknownParameterType = "warning"
 
-[[tool.basedpyright.executionEnvironments]]
-root = "src"
-extraPaths = ["src"]
+# ==========================================
+# PYTEST
+# ==========================================
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
