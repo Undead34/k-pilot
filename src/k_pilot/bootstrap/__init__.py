@@ -1,7 +1,8 @@
 from dotenv import load_dotenv
 
-from k_pilot.bootstrap.container import container
 from k_pilot.core.shared.logging import configure_logging, get_logger
+
+from .container import container
 
 
 def bootstrap() -> None:

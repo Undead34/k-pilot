@@ -18,7 +18,7 @@ class NotificationSkill(KPilotSkill):
 
     @classmethod
     def setup_deps(cls, deps: AppDeps) -> None:
-        from k_pilot.core.application.ports.driven import NotificationPort
+        from k_pilot.core.ports.driven import NotificationPort
 
         if sys.platform == "linux":
             from k_pilot.adapters.driven.notifications.freedesktop_notification_adapter import (

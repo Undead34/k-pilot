@@ -1,7 +1,3 @@
-# Copyright 2026 K-Pilot Contributors
-# SPDX-License-Identifier: MIT
-# pylint: disable=too-few-public-methods
-
 """
 D-Bus notification adapter implementing the Freedesktop Notifications specification.
 
@@ -14,106 +10,21 @@ References:
     - dasbus documentation: https://dasbus.readthedocs.io/
 """
 
-from __future__ import annotations
-
 import contextlib
-from dataclasses import dataclass
-from enum import IntEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast
+from typing import ClassVar, Final, cast
 
-import structlog
 from dasbus.connection import SessionMessageBus
-from gi.repository import GLib  # type: ignore[import]
 
-from k_pilot.core.application.ports.driven import NotificationPort
+from k_pilot.adapters.driven.notifications.freedesktop_notification_types import (
+    NotificationHints,
+    NotificationProxy,
+    UrgencyLevel,
+)
 from k_pilot.core.domain import Notification, Priority, Result
+from k_pilot.core.ports.driven import NotificationPort
+from k_pilot.core.shared.logging import get_logger
 
-if TYPE_CHECKING:
-    from dasbus.client.proxy import InterfaceProxy
-
-
-class NotificationProxy(Protocol):
-    """Protocol for D-Bus Notifications interface."""
-
-    def Notify(
-        self,
-        app_name: str,
-        replaces_id: int,
-        app_icon: str,
-        summary: str,
-        body: str,
-        actions: list[str],
-        hints: dict[str, Any],
-        expire_timeout: int,
-    ) -> int: ...
-
-
-logger = structlog.get_logger("k-pilot.notification_adapter")
-
-
-class NotificationError(Exception):
-    """Base exception for notification-related errors."""
-
-    def __init__(self, message: str, *, original_error: Exception | None = None) -> None:
-        super().__init__(message)
-        self.original_error = original_error
-
-
-class NotificationServiceUnavailableError(NotificationError):
-    """Raised when the D-Bus notification service is not available."""
-
-    pass
-
-
-class NotificationSendError(NotificationError):
-    """Raised when sending a notification fails."""
-
-    pass
-
-
-class UrgencyLevel(IntEnum):
-    """
-    Urgency levels as defined by Freedesktop Notifications spec.
-
-    See: https://specifications.freedesktop.org/notification-spec/latest/ar01s09.html
-    """
-
-    LOW = 0  #: Low urgency. No notification required if user is busy.
-    NORMAL = 1  #: Normal urgency. Visual notification expected.
-    CRITICAL = 2  #: Critical urgency. Notification should not expire.
-
-
-@dataclass(frozen=True, slots=True)
-class NotificationHints:
-    """
-    Immutable container for D-Bus notification hints.
-
-    Attributes:
-        urgency: The urgency level of the notification.
-        desktop_entry: Desktop file identifier without .desktop extension.
-        resident: Whether the notification should remain visible after action.
-    """
-
-    urgency: UrgencyLevel
-    desktop_entry: str
-    resident: bool = False
-
-    def as_glib_dict(self) -> dict[str, Any]:
-        """
-        Convert hints to GLib.Variant dictionary for D-Bus transmission.
-
-        Returns:
-            Dictionary mapping hint keys to GLib.Variant values.
-        """
-        hints: dict[str, Any] = {
-            "urgency": GLib.Variant("y", int(self.urgency)),
-            "desktop-entry": GLib.Variant("s", self.desktop_entry),
-        }
-
-        if self.resident:
-            hints["resident"] = GLib.Variant("b", True)
-
-        return hints
+logger = get_logger("k-pilot.notification_adapter")
 
 
 class FreedesktopNotificationAdapter(NotificationPort):

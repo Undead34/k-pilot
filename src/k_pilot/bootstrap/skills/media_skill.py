@@ -18,7 +18,7 @@ class MediaSkill(KPilotSkill):
     @classmethod
     def setup_deps(cls, deps: "AppDeps") -> None:
         from k_pilot.adapters.driven.mpris.mpris_media_adapter import MprisMediaAdapter
-        from k_pilot.core.application.ports.driven import MediaControlPort
+        from k_pilot.core.ports.driven import MediaControlPort
 
         deps.register(MediaControlPort, MprisMediaAdapter())
 

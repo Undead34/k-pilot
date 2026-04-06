@@ -1,7 +1,3 @@
-# Copyright 2026 K-Pilot Contributors
-# SPDX-License-Identifier: LGPL-2.1-or-later
-# pylint: disable=too-many-public-methods
-
 """
 KWin window manager adapter via kdotool for KDE Plasma 6.
 
@@ -26,8 +22,8 @@ from typing import ClassVar
 
 from k_pilot.adapters.driven.kwin.kwin_executor import KdotoolExecutor
 from k_pilot.adapters.driven.kwin.kwin_types import KdotoolCommand
-from k_pilot.core.application.ports.driven import WindowManagerPort
 from k_pilot.core.domain import Result, WindowInfo
+from k_pilot.core.ports.driven import WindowManagerPort
 from k_pilot.core.shared.logging import get_logger
 
 

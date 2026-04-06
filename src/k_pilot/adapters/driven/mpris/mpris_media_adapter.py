@@ -1,7 +1,3 @@
-# Copyright 2026 K-Pilot Contributors
-# SPDX-License-Identifier: MIT
-# pylint: disable=too-many-public-methods,too-many-instance-attributes
-
 """
 MPRIS2 Media Player adapter for Linux desktop integration.
 
@@ -25,7 +21,6 @@ from gi.repository import GLib  # type: ignore[import]
 
 from k_pilot.adapters.driven.mpris.mpris_media_player_identifier import PlayerIdentifier
 from k_pilot.adapters.driven.mpris.mpris_media_proxy import DbusProxy, PlayerProxy, PropertiesProxy
-from k_pilot.core.application.ports.driven import MediaControlPort
 from k_pilot.core.domain import Result
 from k_pilot.core.domain.media.models import (
     MediaInfo,
@@ -34,6 +29,7 @@ from k_pilot.core.domain.media.models import (
     RepeatMode,
     ShuffleMode,
 )
+from k_pilot.core.ports.driven import MediaControlPort
 from k_pilot.core.shared.logging import get_logger
 
 

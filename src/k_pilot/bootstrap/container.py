@@ -1,5 +1,3 @@
-from typing import TypeVar
-
 from pydantic_ai import Agent
 
 # Skills
@@ -8,8 +6,6 @@ from k_pilot.bootstrap.skills import MediaSkill, NotificationSkill, WindowSkill
 # Internals
 from k_pilot.core.application.app_deps import AppDeps
 from k_pilot.core.application.skill_protocol import KPilotSkill
-
-T = TypeVar("T")
 
 
 class AppContainer:
@@ -68,7 +64,7 @@ class AppContainer:
 
         from pydantic_ai import Agent
 
-        from k_pilot.core.shared.prompts.brain import SYSTEM
+        from k_pilot.core.shared.prompts import SYSTEM
 
         # Instanciamos el agente con su cerebro y modelo
         agent = Agent[AppDeps](

@@ -8,6 +8,8 @@ from k_pilot.bootstrap.container import container
 if TYPE_CHECKING:
     from structlog.stdlib import BoundLogger
 
+from k_pilot.adapters.driving.wake_word_detection.wwd_adapter import WWDEngine
+
 
 async def main_async() -> int:
     # Levanta D-Bus, MPRIS, carga tools
@@ -16,9 +18,17 @@ async def main_async() -> int:
     agent = container.agent
     deps = container.deps
 
+    # Instanciar el motor (puedes pasarle configuraciones personalizadas si lo deseas)
+    engine = WWDEngine()
+
+    try:
+        # Esto iniciará el loop infinito de escucha
+        engine.run()
+    except KeyboardInterrupt:
+        print("Motor detenido manualmente.")
+
     # ws_server = KPilotWebSocketServer(agent=agent, deps=deps)
     # gemini_server = GeminiLiveServer(agent=agent, deps=deps)
-
     # await asyncio.gather(ws_server.start(), gemini_server.start())
 
     return 0

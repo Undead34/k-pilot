@@ -26,7 +26,7 @@ class WindowSkill(KPilotSkill):
 
     @classmethod
     def setup_deps(cls, deps: AppDeps) -> None:
-        from k_pilot.core.application.ports.driven import WindowManagerPort
+        from k_pilot.core.ports.driven import WindowManagerPort
 
         # En Linux usamos el adaptador de KWin que depende de kdotool
         if sys.platform == "linux":
